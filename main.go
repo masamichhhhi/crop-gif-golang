@@ -6,13 +6,19 @@ import (
 	"image"
 	"image/draw"
 	"image/gif"
-	"image/png"
+	"image/jpeg"
+
 	"io"
 	"log"
 	"os"
 )
 
-func splitGif(reader io.Reader) (names []string, err error) {
+type SubImager interface {
+	SubImage(r image.Rectangle) image.Image
+}
+
+// 各フレームを切り出し→各フレームの画像を切り抜く
+func splitGif(reader io.Reader) (files []*os.File, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("Error while decoding: %s", r)
@@ -21,7 +27,7 @@ func splitGif(reader io.Reader) (names []string, err error) {
 
 	gif, err := gif.DecodeAll(reader)
 	if err != nil {
-		return []string{""}, err
+		return nil, err
 	}
 
 	imgWidth, imgHeight := getGifDimensions(gif)
@@ -30,26 +36,52 @@ func splitGif(reader io.Reader) (names []string, err error) {
 	draw.Draw(overpaintImage, overpaintImage.Bounds(), gif.Image[0], image.ZP, draw.Src)
 
 	var ns []string
+	var splitedFiles []*os.File
 
 	for i, srcImg := range gif.Image {
+		// 画像に書き込む
 		draw.Draw(overpaintImage, overpaintImage.Bounds(), srcImg, image.ZP, draw.Over)
 
-		file, err := os.Create(fmt.Sprintf("%s%d%s", "temp", i, ".png"))
+		file, err := os.Create(fmt.Sprintf("%s%d%s", "temp", i, ".jpg"))
+		defer file.Close()
 
 		if err != nil {
-			return []string{""}, err
+			return nil, err
 		}
 
-		err = png.Encode(file, overpaintImage)
+		// ここはencodeする必要ないかも
+		err = jpeg.Encode(file, overpaintImage, &jpeg.Options{Quality: 100})
+		_, err = file.Seek(0, 0)
 		if err != nil {
-			return []string{""}, err
+			fmt.Println("seek:", err)
+			return nil, err
+		}
+
+		img, _, err := image.Decode(file)
+
+		if err != nil {
+			fmt.Println("decode:", err)
+			return nil, err
+		}
+
+		fso, err := os.Create(fmt.Sprintf("%s%d%s", "out", i, ".jpg"))
+		if err != nil {
+			fmt.Println("create:", err)
+			return nil, err
+		}
+
+		cimg := img.(SubImager).SubImage(image.Rect(0, 0, 10, 20))
+		jpeg.Encode(fso, cimg, &jpeg.Options{Quality: 100})
+
+		if err != nil {
+			return nil, err
 		}
 
 		ns = append(ns, file.Name())
-		file.Close()
+		splitedFiles = append(splitedFiles, file)
 	}
 
-	return ns, nil
+	return splitedFiles, nil
 }
 
 func getGifDimensions(gif *gif.GIF) (x, y int) {
@@ -95,11 +127,27 @@ func main() {
 
 	defer file.Close()
 
-	fmt.Println(flag.Arg(0))
-
-	names, err := splitGif(file)
+	files, err := splitGif(file)
 	if err != nil {
 		log.Fatalf(err.Error())
 	}
-	fmt.Println(names)
+	fmt.Println(files)
+
+	// for i, f := range files {
+	// 	img, err := png.Decode(f)
+
+	// 	if err != nil {
+	// 		fmt.Println("decode: ", err)
+	// 		return
+	// 	}
+
+	// 	defer f.Close()
+
+	// 	fso, err := os.Create(fmt.Sprintf("out_%d.png", i))
+
+	// 	defer fso.Close()
+	// 	cimg := img.(SubImager).SubImage(image.Rect(50, 0, 150, 100))
+	// 	png.Encode(fso, cimg)
+	// }
+
 }
