@@ -4,9 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"image"
+	"image/color/palette"
 	"image/draw"
 	"image/gif"
-	"image/jpeg"
+	"image/png"
 
 	"io"
 	"log"
@@ -25,24 +26,27 @@ func splitGif(reader io.Reader) (files []*os.File, err error) {
 		}
 	}()
 
-	gif, err := gif.DecodeAll(reader)
+	inputGif, err := gif.DecodeAll(reader)
 	if err != nil {
 		return nil, err
 	}
 
-	imgWidth, imgHeight := getGifDimensions(gif)
+	imgWidth, imgHeight := getGifDimensions(inputGif)
 
 	overpaintImage := image.NewRGBA(image.Rect(0, 0, imgWidth, imgHeight))
-	draw.Draw(overpaintImage, overpaintImage.Bounds(), gif.Image[0], image.ZP, draw.Src)
+	draw.Draw(overpaintImage, overpaintImage.Bounds(), inputGif.Image[0], image.ZP, draw.Src)
 
 	var ns []string
 	var splitedFiles []*os.File
 
-	for i, srcImg := range gif.Image {
+	outGif := &gif.GIF{}
+
+	for i, srcImg := range inputGif.Image {
 		// 画像に書き込む
 		draw.Draw(overpaintImage, overpaintImage.Bounds(), srcImg, image.ZP, draw.Over)
 
-		file, err := os.Create(fmt.Sprintf("%s%d%s", "temp", i, ".jpg"))
+		// file, err := os.Create(fmt.Sprintf("%s%d%s", "temp", i, ".jpg"))
+		file, err := os.Create(fmt.Sprintf("%s%d%s", "temp", i, ".png"))
 		defer file.Close()
 
 		if err != nil {
@@ -50,36 +54,68 @@ func splitGif(reader io.Reader) (files []*os.File, err error) {
 		}
 
 		// ここはencodeする必要ないかも
-		err = jpeg.Encode(file, overpaintImage, &jpeg.Options{Quality: 100})
+		// err = jpeg.Encode(file, overpaintImage, &jpeg.Options{Quality: 100})
+		err = png.Encode(file, overpaintImage)
+
+		if err != nil {
+			fmt.Println("encode: ", err)
+			return nil, err
+		}
+
 		_, err = file.Seek(0, 0)
 		if err != nil {
 			fmt.Println("seek:", err)
 			return nil, err
 		}
 
-		img, _, err := image.Decode(file)
+		// inGif, err := gif.Decode(file)
+		inGif, _, err := image.Decode(file)
 
+		cimg := inGif.(SubImager).SubImage(image.Rect(0, 0, 200, 200))
+
+		paletted := image.NewPaletted(cimg.Bounds(), palette.WebSafe)
+		for y := cimg.Bounds().Min.Y; y < cimg.Bounds().Max.Y; y++ {
+			for x := cimg.Bounds().Min.X; x < cimg.Bounds().Max.X; x++ {
+				paletted.Set(x, y, cimg.At(x, y))
+			}
+		}
+
+		outGif.Image = append(outGif.Image, paletted)
+		outGif.Delay = append(outGif.Delay, 0)
+
+		_, err = file.Seek(0, 0)
 		if err != nil {
-			fmt.Println("decode:", err)
+			fmt.Println("seek:", err)
 			return nil, err
 		}
 
-		fso, err := os.Create(fmt.Sprintf("%s%d%s", "out", i, ".jpg"))
-		if err != nil {
-			fmt.Println("create:", err)
-			return nil, err
-		}
+		// img, _, err := image.Decode(file)
 
-		cimg := img.(SubImager).SubImage(image.Rect(0, 0, 10, 20))
-		jpeg.Encode(fso, cimg, &jpeg.Options{Quality: 100})
+		// if err != nil {
+		// 	fmt.Println("decode:", err)
+		// 	return nil, err
+		// }
 
-		if err != nil {
-			return nil, err
-		}
+		// fso, err := os.Create(fmt.Sprintf("%s%d%s", "out", i, ".jpg"))
+		// if err != nil {
+		// 	fmt.Println("create:", err)
+		// 	return nil, err
+		// }
+
+		// cimg := img.(SubImager).SubImage(image.Rect(0, 0, 200, 200))
+		// jpeg.Encode(fso, cimg, &jpeg.Options{Quality: 100})
+
+		// if err != nil {
+		// 	return nil, err
+		// }
 
 		ns = append(ns, file.Name())
 		splitedFiles = append(splitedFiles, file)
 	}
+
+	f, _ := os.OpenFile("out.gif", os.O_WRONLY|os.O_CREATE, 0600)
+	defer f.Close()
+	gif.EncodeAll(f, outGif)
 
 	return splitedFiles, nil
 }
@@ -127,19 +163,20 @@ func main() {
 
 	defer file.Close()
 
-	files, err := splitGif(file)
+	_, err = splitGif(file)
 	if err != nil {
 		log.Fatalf(err.Error())
 	}
-	fmt.Println(files)
+	// fmt.Println(files)
 
-	// for i, f := range files {
-	// 	img, err := png.Decode(f)
+	// for _, f := range files {
+	// 	_, err := png.Decode(f)
 
 	// 	if err != nil {
 	// 		fmt.Println("decode: ", err)
 	// 		return
 	// 	}
+	// }
 
 	// 	defer f.Close()
 
