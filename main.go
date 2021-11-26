@@ -159,7 +159,7 @@ func main() {
 
 	defer file.Close()
 
-	_, err = cropGif(file, 0, 200, 500)
+	_, err = cropGif(file, 200, 200, 500)
 	if err != nil {
 		log.Fatalf(err.Error())
 	}
