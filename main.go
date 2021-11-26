@@ -8,6 +8,7 @@ import (
 	"image/draw"
 	"image/gif"
 	"image/png"
+	"io/ioutil"
 
 	"io"
 	"log"
@@ -19,7 +20,7 @@ type SubImager interface {
 }
 
 // 各フレームを切り出し→各フレームの画像を切り抜く
-func splitGif(reader io.Reader) (files []*os.File, err error) {
+func cropGif(reader io.Reader, cropStartX, cropStartY, cropSize int) (files []*os.File, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("Error while decoding: %s", r)
@@ -41,76 +42,71 @@ func splitGif(reader io.Reader) (files []*os.File, err error) {
 
 	outGif := &gif.GIF{}
 
-	for i, srcImg := range inputGif.Image {
+	for _, srcImg := range inputGif.Image {
 		// 画像に書き込む
 		draw.Draw(overpaintImage, overpaintImage.Bounds(), srcImg, image.ZP, draw.Over)
 
-		// file, err := os.Create(fmt.Sprintf("%s%d%s", "temp", i, ".jpg"))
-		file, err := os.Create(fmt.Sprintf("%s%d%s", "temp", i, ".png"))
-		defer file.Close()
+		tempFile, err := ioutil.TempFile(os.TempDir(), "temp")
+		defer tempFile.Close()
 
 		if err != nil {
 			return nil, err
 		}
 
 		// ここはencodeする必要ないかも
-		// err = jpeg.Encode(file, overpaintImage, &jpeg.Options{Quality: 100})
-		err = png.Encode(file, overpaintImage)
-
+		err = png.Encode(tempFile, overpaintImage)
 		if err != nil {
 			fmt.Println("encode: ", err)
 			return nil, err
 		}
 
-		_, err = file.Seek(0, 0)
+		_, err = tempFile.Seek(0, 0)
 		if err != nil {
 			fmt.Println("seek:", err)
 			return nil, err
 		}
 
-		// inGif, err := gif.Decode(file)
-		inGif, _, err := image.Decode(file)
+		pngImg, _, err := image.Decode(tempFile)
 
-		cimg := inGif.(SubImager).SubImage(image.Rect(0, 0, 200, 200))
+		if err != nil {
+			fmt.Println("decode: ", err)
+			return nil, err
+		}
 
-		paletted := image.NewPaletted(cimg.Bounds(), palette.WebSafe)
-		for y := cimg.Bounds().Min.Y; y < cimg.Bounds().Max.Y; y++ {
-			for x := cimg.Bounds().Min.X; x < cimg.Bounds().Max.X; x++ {
-				paletted.Set(x, y, cimg.At(x, y))
+		_, err = tempFile.Seek(0, 0)
+		if err != nil {
+			fmt.Println("seek:", err)
+			return nil, err
+		}
+
+		cimg := pngImg.(SubImager).SubImage(image.Rect(cropStartX, cropStartY, cropStartX+cropSize, cropStartY+cropSize))
+
+		err = png.Encode(tempFile, cimg)
+		if err != nil {
+			fmt.Println("encode: ", err)
+			return nil, err
+		}
+
+		_, err = tempFile.Seek(0, 0)
+		if err != nil {
+			fmt.Println("seek:", err)
+			return nil, err
+		}
+
+		inGif, _, err := image.Decode(tempFile)
+
+		paletted := image.NewPaletted(inGif.Bounds(), palette.WebSafe)
+		for y := inGif.Bounds().Min.Y; y < inGif.Bounds().Max.Y; y++ {
+			for x := inGif.Bounds().Min.X; x < inGif.Bounds().Max.X; x++ {
+				paletted.Set(x, y, inGif.At(x, y))
 			}
 		}
 
 		outGif.Image = append(outGif.Image, paletted)
 		outGif.Delay = append(outGif.Delay, 0)
 
-		_, err = file.Seek(0, 0)
-		if err != nil {
-			fmt.Println("seek:", err)
-			return nil, err
-		}
-
-		// img, _, err := image.Decode(file)
-
-		// if err != nil {
-		// 	fmt.Println("decode:", err)
-		// 	return nil, err
-		// }
-
-		// fso, err := os.Create(fmt.Sprintf("%s%d%s", "out", i, ".jpg"))
-		// if err != nil {
-		// 	fmt.Println("create:", err)
-		// 	return nil, err
-		// }
-
-		// cimg := img.(SubImager).SubImage(image.Rect(0, 0, 200, 200))
-		// jpeg.Encode(fso, cimg, &jpeg.Options{Quality: 100})
-
-		// if err != nil {
-		// 	return nil, err
-		// }
-
-		ns = append(ns, file.Name())
-		splitedFiles = append(splitedFiles, file)
+		ns = append(ns, tempFile.Name())
+		splitedFiles = append(splitedFiles, tempFile)
 	}
 
 	f, _ := os.OpenFile("out.gif", os.O_WRONLY|os.O_CREATE, 0600)
@@ -163,28 +159,9 @@ func main() {
 
 	defer file.Close()
 
-	_, err = splitGif(file)
+	_, err = cropGif(file, 0, 200, 500)
 	if err != nil {
 		log.Fatalf(err.Error())
 	}
-	// fmt.Println(files)
-
-	// for _, f := range files {
-	// 	_, err := png.Decode(f)
-
-	// 	if err != nil {
-	// 		fmt.Println("decode: ", err)
-	// 		return
-	// 	}
-	// }
-
-	// 	defer f.Close()
-
-	// 	fso, err := os.Create(fmt.Sprintf("out_%d.png", i))
-
-	// 	defer fso.Close()
-	// 	cimg := img.(SubImager).SubImage(image.Rect(50, 0, 150, 100))
-	// 	png.Encode(fso, cimg)
-	// }
 
 }
