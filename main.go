@@ -4,7 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"image"
-	"image/color/palette"
+	"image/color"
 	"image/draw"
 	"image/gif"
 	"image/png"
@@ -13,6 +13,8 @@ import (
 	"io"
 	"log"
 	"os"
+
+	"github.com/soniakeys/quant/median"
 )
 
 type SubImager interface {
@@ -95,7 +97,14 @@ func cropGif(reader io.Reader, cropStartX, cropStartY, cropSize int) (files []*o
 
 		inGif, _, err := image.Decode(tempFile)
 
-		paletted := image.NewPaletted(inGif.Bounds(), palette.WebSafe)
+		// 256色を決定
+		q := median.Quantizer(256)
+		p := q.Quantize(make(color.Palette, 0, 256), inGif)
+		paletted := image.NewPaletted(inGif.Bounds(), p)
+
+		// ディザリング
+		draw.FloydSteinberg.Draw(paletted, inGif.Bounds(), inGif, image.ZP)
+
 		for y := inGif.Bounds().Min.Y; y < inGif.Bounds().Max.Y; y++ {
 			for x := inGif.Bounds().Min.X; x < inGif.Bounds().Max.X; x++ {
 				paletted.Set(x, y, inGif.At(x, y))
@@ -159,7 +168,7 @@ func main() {
 
 	defer file.Close()
 
-	_, err = cropGif(file, 200, 200, 500)
+	_, err = cropGif(file, 0, 0, 100)
 	if err != nil {
 		log.Fatalf(err.Error())
 	}
