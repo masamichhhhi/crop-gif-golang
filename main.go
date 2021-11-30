@@ -10,6 +10,7 @@ import (
 	"image/gif"
 	"image/png"
 	"io/ioutil"
+	"sort"
 
 	"io"
 	"log"
@@ -23,6 +24,28 @@ type SubImager interface {
 	SubImage(r image.Rectangle) image.Image
 }
 
+type ProcessedImage struct {
+	palatted *image.Paletted
+	delay    int
+	index    int
+}
+
+type ByIndex []ProcessedImage
+
+func (a ByIndex) Len() int {
+	return len(a)
+}
+
+func (a ByIndex) Less(i, j int) bool {
+	return a[i].index < a[j].index
+}
+
+func (a ByIndex) Swap(i, j int) {
+	a[i], a[j] = a[j], a[i]
+}
+
+// TODO: 順序をなんとかして保証する
+// srcImageを拡張したtypeを作って、順序をそこに持たせる→並行処理終わったあとソートする？
 func cropGifConcurrent(reader io.Reader, cropStartX, cropStartY, cropSize int) (files []*os.File, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -45,8 +68,11 @@ func cropGifConcurrent(reader io.Reader, cropStartX, cropStartY, cropSize int) (
 	eg, ctx := errgroup.WithContext(context.Background())
 
 	outGif := &gif.GIF{}
+	outGif2 := &gif.GIF{}
+	processedImages := []ProcessedImage{}
 
-	for _, srcImg := range inputGif.Image {
+	for i, srcImg := range inputGif.Image {
+		iterator := i
 		img := srcImg
 		// 各フレームごとで並行処理する
 		eg.Go(func() error {
@@ -118,6 +144,11 @@ func cropGifConcurrent(reader io.Reader, cropStartX, cropStartY, cropSize int) (
 
 			outGif.Image = append(outGif.Image, paletted)
 			outGif.Delay = append(outGif.Delay, 0)
+			processedImages = append(processedImages, ProcessedImage{
+				palatted: paletted,
+				delay:    0,
+				index:    iterator,
+			})
 
 			ns = append(ns, tempFile.Name())
 			splitedFiles = append(splitedFiles, tempFile)
@@ -136,6 +167,21 @@ func cropGifConcurrent(reader io.Reader, cropStartX, cropStartY, cropSize int) (
 
 	if err := eg.Wait(); err != nil {
 		log.Fatal(err)
+	}
+
+	// for _, img := range processedImages {
+	// 	fmt.Println(img.index)
+	// }
+
+	sort.Sort(ByIndex(processedImages))
+
+	for i, img := range processedImages {
+		fmt.Println(img.palatted == outGif.Image[i])
+		if img.palatted == outGif.Image[i] {
+			fmt.Println(img.palatted)
+		}
+		outGif2.Image = append(outGif.Image, img.palatted)
+		outGif2.Delay = append(outGif.Delay, img.delay)
 	}
 
 	f, _ := os.OpenFile("out.gif", os.O_WRONLY|os.O_CREATE, 0600)
@@ -292,7 +338,7 @@ func main() {
 
 	defer file.Close()
 
-	_, err = cropGif(file, 0, 0, 100)
+	_, err = cropGifConcurrent(file, 0, 0, 100)
 	if err != nil {
 		log.Fatalf(err.Error())
 	}
