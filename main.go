@@ -169,10 +169,6 @@ func cropGifConcurrent(reader io.Reader, cropStartX, cropStartY, cropSize int) (
 		log.Fatal(err)
 	}
 
-	// for _, img := range processedImages {
-	// 	fmt.Println(img.index)
-	// }
-
 	sort.Sort(ByIndex(processedImages))
 
 	for i, img := range processedImages {
