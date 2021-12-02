@@ -21,6 +21,12 @@ type SubImager interface {
 	SubImage(r image.Rectangle) image.Image
 }
 
+type ProcessedImage struct {
+	palatted *image.Paletted
+	delay    int
+	index    int
+}
+
 // 各フレームを切り出し→各フレームの画像を切り抜く
 func cropGif(reader io.Reader, cropStartX, cropStartY, cropSize int) (files []*os.File, err error) {
 	defer func() {
@@ -168,7 +174,7 @@ func main() {
 
 	defer file.Close()
 
-	_, err = cropGif(file, 0, 0, 100)
+	_, err = cropGif(file, 100, 100, 100)
 	if err != nil {
 		log.Fatalf(err.Error())
 	}
