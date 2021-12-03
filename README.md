@@ -4,7 +4,8 @@ goroutin使って各フレームで並行処理したい
   
 ## TODO
 - [x] https://stackoverflow.com/questions/37856337/how-to-collect-values-from-n-goroutines-executed-in-a-specific-order みたいに順番を保証する感じに直す
-- [ ] ↑でやってもだめだったから https://gist.github.com/thoas/dbd554fb5e1ac6e5262d の通り動かす
+- [x] ↑でやってもだめだったから https://gist.github.com/thoas/dbd554fb5e1ac6e5262d の通り動かす
+- imagingのクロップ試す
 - [ ] エラーハンドリング(errGroupをやめてwaitGroupにする)
 
 ## 参考
