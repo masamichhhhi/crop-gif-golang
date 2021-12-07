@@ -9,15 +9,27 @@ import (
 	"image/gif"
 	"image/png"
 	"io/ioutil"
+	"log"
 	"sync"
 
 	"io"
-	"log"
 	"os"
 
+	"github.com/disintegration/imaging"
 	"github.com/soniakeys/quant/median"
 )
 
+type Result struct {
+	Paletted *image.Paletted
+	Thumb    *Thumb
+	Position int
+}
+
+type Thumb struct {
+	Image  *image.NRGBA
+	Width  int
+	Height int
+}
 type SubImager interface {
 	SubImage(r image.Rectangle) image.Image
 }
@@ -154,102 +166,6 @@ func cropGifConcurrent(reader io.Reader, cropStartX, cropStartY, cropSize int) (
 			splitedFiles = append(splitedFiles, tempFile)
 		}(iterator)
 	}
-
-	// 各フレームごとで並行処理する
-	// 	eg.Go(func() error {
-	// 		// 画像に書き込む
-	// 		draw.Draw(overpaintImage, overpaintImage.Bounds(), img, image.ZP, draw.Over)
-
-	// 		tempFile, err := ioutil.TempFile(os.TempDir(), "temp")
-	// 		defer tempFile.Close()
-
-	// 		if err != nil {
-	// 			return err
-	// 		}
-
-	// 		// ここはencodeする必要ないかも
-	// 		err = png.Encode(tempFile, overpaintImage)
-	// 		if err != nil {
-	// 			fmt.Println("encode: ", err)
-	// 			return err
-	// 		}
-
-	// 		_, err = tempFile.Seek(0, 0)
-	// 		if err != nil {
-	// 			fmt.Println("seek:", err)
-	// 			return err
-	// 		}
-
-	// 		pngImg, _, err := image.Decode(tempFile)
-
-	// 		if err != nil {
-	// 			fmt.Println("decode: ", err)
-	// 			return err
-	// 		}
-
-	// 		_, err = tempFile.Seek(0, 0)
-	// 		if err != nil {
-	// 			fmt.Println("seek:", err)
-	// 			return err
-	// 		}
-
-	// 		cimg := pngImg.(SubImager).SubImage(image.Rect(cropStartX, cropStartY, cropStartX+cropSize, cropStartY+cropSize))
-
-	// 		err = png.Encode(tempFile, cimg)
-	// 		if err != nil {
-	// 			fmt.Println("encode: ", err)
-	// 			return err
-	// 		}
-
-	// 		_, err = tempFile.Seek(0, 0)
-	// 		if err != nil {
-	// 			fmt.Println("seek:", err)
-	// 			return err
-	// 		}
-
-	// 		inGif, _, err := image.Decode(tempFile)
-
-	// 		// 256色を決定
-	// 		q := median.Quantizer(256)
-	// 		p := q.Quantize(make(color.Palette, 0, 256), inGif)
-	// 		paletted := image.NewPaletted(inGif.Bounds(), p)
-
-	// 		// ディザリング
-	// 		draw.FloydSteinberg.Draw(paletted, inGif.Bounds(), inGif, image.ZP)
-
-	// 		for y := inGif.Bounds().Min.Y; y < inGif.Bounds().Max.Y; y++ {
-	// 			for x := inGif.Bounds().Min.X; x < inGif.Bounds().Max.X; x++ {
-	// 				paletted.Set(x, y, inGif.At(x, y))
-	// 			}
-	// 		}
-
-	// 		outGif.Image = append(outGif.Image, paletted)
-	// 		outGif.Delay = append(outGif.Delay, 0)
-	// 		processedImages = append(processedImages, ProcessedImage{
-	// 			palatted: paletted,
-	// 			delay:    0,
-	// 			index:    iterator,
-	// 		})
-
-	// 		ns = append(ns, tempFile.Name())
-	// 		splitedFiles = append(splitedFiles, tempFile)
-
-	// 		select {
-	// 		case <-ctx.Done():
-	// 			// fmt.Println("Canceled: ", i)
-	// 			return nil
-	// 		default:
-	// 			// fmt.Println("End: ", i)
-	// 			return nil
-	// 		}
-	// 	})
-
-	// }
-
-	// if err := eg.Wait(); err != nil {
-	// 	log.Fatal(err)
-	// }
-
 	wg.Wait()
 
 	// sort.Sort(ByIndex(processedImages))
@@ -264,6 +180,75 @@ func cropGifConcurrent(reader io.Reader, cropStartX, cropStartY, cropSize int) (
 	gif.EncodeAll(f, outGif2)
 
 	return splitedFiles, nil
+}
+
+func cropGif(fileName string, cropStartX, cropStartY, cropSize int) error {
+	inputFile, err := os.Open(fileName)
+
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	defer inputFile.Close()
+
+	g, err := gif.DecodeAll(inputFile)
+
+	if err != nil {
+		return err
+	}
+
+	length := len(g.Image)
+	done := make(chan *Result)
+	images := make([]*image.Paletted, length)
+
+	processed := 0
+	// imgWidth, imgHeight := getGifDimensions(g)
+
+	for i := range g.Image {
+		go func(paletted *image.Paletted, width int, height int, position int) {
+
+			done <- &Result{
+				Thumb: &Thumb{
+					Image: imaging.Crop(paletted, image.Rectangle{
+						Min: image.Point{X: cropStartX, Y: cropStartY},
+						Max: image.Point{X: cropStartX + cropSize, Y: cropStartY + cropSize},
+					}),
+					Width:  width,
+					Height: height,
+				},
+				Position: position,
+				Paletted: image.NewPaletted(image.Rect(0, 0, width, height), paletted.Palette),
+			}
+		}(g.Image[i], cropSize, cropSize, i)
+	}
+
+	for {
+		result := <-done
+
+		draw.Draw(result.Paletted, image.Rect(0, 0, result.Thumb.Width, result.Thumb.Height), result.Thumb.Image, image.Pt(0, 0), draw.Src)
+		images[result.Position] = result.Paletted
+		processed++
+
+		if processed == length {
+			break
+		}
+	}
+	g.Image = images
+	outputFile, err := os.Create("out.gif")
+
+	if err != nil {
+		return err
+	}
+
+	defer outputFile.Close()
+
+	err = gif.EncodeAll(outputFile, g)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func getGifDimensions(gif *gif.GIF) (x, y int) {
@@ -309,7 +294,7 @@ func main() {
 
 	defer file.Close()
 
-	_, err = cropGifConcurrent(file, 0, 0, 100)
+	err = cropGif(flag.Arg(0), 100, 0, 100)
 	if err != nil {
 		log.Fatalf(err.Error())
 	}
