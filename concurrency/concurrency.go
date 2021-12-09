@@ -207,13 +207,14 @@ func cropGif(fileName string, cropStartX, cropStartY, cropSize int) error {
 
 	for i := range g.Image {
 		go func(paletted *image.Paletted, width int, height int, position int) {
+			cropedImage := imaging.Crop(paletted, image.Rectangle{
+				Min: image.Point{X: cropStartX, Y: cropStartY},
+				Max: image.Point{X: cropStartX + cropSize, Y: cropStartY + cropSize},
+			})
 
 			done <- &Result{
 				Thumb: &Thumb{
-					Image: imaging.Crop(paletted, image.Rectangle{
-						Min: image.Point{X: cropStartX, Y: cropStartY},
-						Max: image.Point{X: cropStartX + cropSize, Y: cropStartY + cropSize},
-					}),
+					Image:  cropedImage,
 					Width:  width,
 					Height: height,
 				},
@@ -226,7 +227,7 @@ func cropGif(fileName string, cropStartX, cropStartY, cropSize int) error {
 	for {
 		result := <-done
 
-		draw.Draw(result.Paletted, image.Rect(0, 0, result.Thumb.Width, result.Thumb.Height), result.Thumb.Image, image.Pt(0, 0), draw.Src)
+		draw.Draw(result.Paletted, image.Rect(0, 0, cropSize, cropSize), result.Thumb.Image, image.ZP, draw.Src)
 		images[result.Position] = result.Paletted
 		processed++
 
@@ -247,6 +248,15 @@ func cropGif(fileName string, cropStartX, cropStartY, cropSize int) error {
 	if err != nil {
 		return err
 	}
+
+	// for i, img := range g.Image {
+	// 	outFile, err := os.Create(fmt.Sprintf("out%d.png", i))
+	// 	defer outFile.Close()
+	// 	err = png.Encode(outFile, img)
+	// 	if err != nil {
+	// 		panic(err)
+	// 	}
+	// }
 
 	return nil
 }
