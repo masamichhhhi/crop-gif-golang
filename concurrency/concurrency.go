@@ -10,7 +10,6 @@ import (
 	"image/png"
 	"io/ioutil"
 	"log"
-	"sync"
 
 	"io"
 	"os"
@@ -55,7 +54,7 @@ func (a ByIndex) Swap(i, j int) {
 }
 
 // TODO: 順序をなんとかして保証する
-func cropGifConcurrent(reader io.Reader, cropStartX, cropStartY, cropSize int) (files []*os.File, err error) {
+func cropGifConcurrent(reader io.Reader, cropStartX, cropStartY, cropSize int) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("Error while decoding: %s", r)
@@ -64,7 +63,7 @@ func cropGifConcurrent(reader io.Reader, cropStartX, cropStartY, cropSize int) (
 
 	inputGif, err := gif.DecodeAll(reader)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	imgWidth, imgHeight := getGifDimensions(inputGif)
@@ -72,25 +71,24 @@ func cropGifConcurrent(reader io.Reader, cropStartX, cropStartY, cropSize int) (
 	overpaintImage := image.NewRGBA(image.Rect(0, 0, imgWidth, imgHeight))
 	draw.Draw(overpaintImage, overpaintImage.Bounds(), inputGif.Image[0], image.ZP, draw.Src)
 
-	var ns []string
-	var splitedFiles []*os.File
+	// var splitedFiles []*os.File
 	// eg, ctx := errgroup.WithContext(context.Background())
-	wg := &sync.WaitGroup{}
+	// wg := &sync.WaitGroup{}
 
 	outGif := &gif.GIF{}
-	outGif2 := &gif.GIF{}
 	// processedImages := []ProcessedImage{}
 	processedImageList := make([]ProcessedImage, len(inputGif.Image))
+	done := make(chan *ProcessedImage)
+	length := len(inputGif.Image)
+	images := make([]*image.Paletted, length)
 
-	for i, srcImg := range inputGif.Image {
-		iterator := i
-		img := srcImg
+	processed := 0
+
+	for i := range inputGif.Image {
 		processedImageList[i].index = i
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+		go func(paletted *image.Paletted, i int) {
 			// 画像に書き込む
-			draw.Draw(overpaintImage, overpaintImage.Bounds(), img, image.ZP, draw.Over)
+			draw.Draw(overpaintImage, overpaintImage.Bounds(), paletted, image.ZP, draw.Over)
 
 			tempFile, err := ioutil.TempFile(os.TempDir(), "temp")
 			defer tempFile.Close()
@@ -145,41 +143,63 @@ func cropGifConcurrent(reader io.Reader, cropStartX, cropStartY, cropSize int) (
 			// 256色を決定
 			q := median.Quantizer(256)
 			p := q.Quantize(make(color.Palette, 0, 256), inGif)
-			paletted := image.NewPaletted(inGif.Bounds(), p)
+			newPaletted := image.NewPaletted(inGif.Bounds(), p)
 
 			// ディザリング
-			draw.FloydSteinberg.Draw(paletted, inGif.Bounds(), inGif, image.ZP)
+			draw.FloydSteinberg.Draw(newPaletted, inGif.Bounds(), inGif, image.ZP)
 
 			for y := inGif.Bounds().Min.Y; y < inGif.Bounds().Max.Y; y++ {
 				for x := inGif.Bounds().Min.X; x < inGif.Bounds().Max.X; x++ {
-					paletted.Set(x, y, inGif.At(x, y))
+					newPaletted.Set(x, y, inGif.At(x, y))
 				}
 			}
 
-			outGif.Image = append(outGif.Image, paletted)
-			outGif.Delay = append(outGif.Delay, 0)
+			done <- &ProcessedImage{
+				palatted: newPaletted,
+				delay:    0,
+				index:    i,
+			}
 
-			processedImageList[i].palatted = paletted
-			processedImageList[i].delay = 0
+			// outGif.Image = append(outGif.Image, paletted)
+			// outGif.Delay = append(outGif.Delay, 0)
 
-			ns = append(ns, tempFile.Name())
-			splitedFiles = append(splitedFiles, tempFile)
-		}(iterator)
+			// processedImageList[i].palatted = paletted
+			// processedImageList[i].delay = 0
+
+			// ns = append(ns, tempFile.Name())
+			// splitedFiles = append(splitedFiles, tempFile)
+		}(inputGif.Image[i], i)
 	}
-	wg.Wait()
+
+	for {
+		result := <-done
+
+		draw.Draw(result.palatted, image.Rect(0, 0, cropSize, cropSize), result.palatted, image.ZP, draw.Src)
+		images[result.index] = result.palatted
+		processed++
+
+		if processed == length {
+			break
+		}
+	}
+
+	outGif.Image = images
+	outGif.Delay = make([]int, length)
+	for i := range outGif.Image {
+		outGif.Delay[i] = 0
+	}
 
 	// sort.Sort(ByIndex(processedImages))
 
-	for _, img := range processedImageList {
-		outGif2.Image = append(outGif2.Image, img.palatted)
-		outGif2.Delay = append(outGif2.Delay, img.delay)
-	}
-
 	f, _ := os.OpenFile("out.gif", os.O_WRONLY|os.O_CREATE, 0600)
 	defer f.Close()
-	gif.EncodeAll(f, outGif2)
+	err = gif.EncodeAll(f, outGif)
 
-	return splitedFiles, nil
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func cropGif(fileName string, cropStartX, cropStartY, cropSize int) error {
@@ -206,11 +226,14 @@ func cropGif(fileName string, cropStartX, cropStartY, cropSize int) error {
 	// imgWidth, imgHeight := getGifDimensions(g)
 
 	for i := range g.Image {
+
 		go func(paletted *image.Paletted, width int, height int, position int) {
 			cropedImage := imaging.Crop(paletted, image.Rectangle{
 				Min: image.Point{X: cropStartX, Y: cropStartY},
 				Max: image.Point{X: cropStartX + cropSize, Y: cropStartY + cropSize},
 			})
+
+			// cropedImage := imaging.CropCenter(paletted, cropSize, cropSize)
 
 			done <- &Result{
 				Thumb: &Thumb{
